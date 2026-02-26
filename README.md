@@ -42,7 +42,7 @@ cargo build --release
 {
   "mcpServers": {
     "zw-steg": {
-      "command": "d:\\AI\\CTFTOOLS\\zw-mcp-server\\target\\release\\zw-mcp-server.exe",
+      "command": "Yourpath\\zw-mcp-server.exe",
       "args": []
     }
   }
@@ -57,7 +57,7 @@ cargo build --release
 {
   "mcpServers": {
     "zw-steg": {
-      "command": "d:\\AI\\CTFTOOLS\\zw-mcp-server\\target\\release\\zw-mcp-server.exe"
+      "command": "Yourpath\\zw-mcp-server.exe"
     }
   }
 }
@@ -74,9 +74,3 @@ cargo build --release
 > "请分析这段文本中是否包含零宽字符隐写信息并解码"
 
 MCP 会自动路由到 `zw_analyze` + `zw_decode` 工具。
-
-## 协议
-
-- 传输: stdio (stdin/stdout)
-- 协议: JSON-RPC 2.0
-- MCP 版本: 2024-11-05
