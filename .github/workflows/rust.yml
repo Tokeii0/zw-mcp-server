@@ -1,0 +1,186 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '版本标签 (例如 v0.1.0)，留空则使用 git sha'
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: zw-mcp-server
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Linux ---
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+
+          # --- macOS ---
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+
+          # --- Windows ---
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (Linux cross-compile)
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install musl-tools (x86_64-musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ github.event.inputs.tag_name }}" ]]; then
+            echo "version=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package (Unix tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          STAGING="${{ env.BINARY_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}" "$STAGING/"
+          cp README.md mcp-config.json "$STAGING/" 2>/dev/null || true
+          tar czf "$STAGING.tar.gz" "$STAGING"
+          echo "ASSET=$STAGING.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (Windows zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          STAGING="${{ env.BINARY_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" "$STAGING/"
+          cp README.md mcp-config.json "$STAGING/" 2>/dev/null || true
+          7z a "$STAGING.zip" "$STAGING"
+          echo "ASSET=$STAGING.zip" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag_name != ''
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip 2>/dev/null | tee SHA256SUMS.txt
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "zw-mcp-server ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## 零宽字符隐写术 MCP Server ${{ steps.tag.outputs.tag }}
+
+            ### 下载
+
+            | 平台 | 架构 | 文件 |
+            |------|------|------|
+            | Linux | x86_64 (glibc) | `zw-mcp-server-*-x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux | x86_64 (musl/静态) | `zw-mcp-server-*-x86_64-unknown-linux-musl.tar.gz` |
+            | Linux | aarch64 (glibc) | `zw-mcp-server-*-aarch64-unknown-linux-gnu.tar.gz` |
+            | Linux | aarch64 (musl/静态) | `zw-mcp-server-*-aarch64-unknown-linux-musl.tar.gz` |
+            | macOS | x86_64 (Intel) | `zw-mcp-server-*-x86_64-apple-darwin.tar.gz` |
+            | macOS | aarch64 (Apple Silicon) | `zw-mcp-server-*-aarch64-apple-darwin.tar.gz` |
+            | Windows | x86_64 | `zw-mcp-server-*-x86_64-pc-windows-msvc.zip` |
+            | Windows | aarch64 (ARM) | `zw-mcp-server-*-aarch64-pc-windows-msvc.zip` |
+
+            ### 校验
+            见 `SHA256SUMS.txt`
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+          generate_release_notes: true
