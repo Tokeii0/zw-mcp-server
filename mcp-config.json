@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "zw-steg": {
+      "command": "d:\\AI\\CTFTOOLS\\zw-mcp-server\\target\\release\\zw-mcp-server.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}
